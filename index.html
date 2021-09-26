@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Basic Scene</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r126/three.js" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/three@0.126.0/examples/js/loaders/GLTFLoader.js"></script>
+</head>
+<body>
+    <script type="module">
+        import { ARButton } from 'https://unpkg.com/three@0.126.0/examples/jsm/webxr/ARButton.js';
+
+        let camera, scene, renderer;
+        let reticle;
+        let controller;
+        let model;
+        
+        const init = () => {
+            const container = document.createElement('div');
+            document.body.appendChild(container);
+
+            // Creating a Scene where all will be displayed
+            scene = new THREE.Scene();
+
+            // Creating a camera
+            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 40);
+
+            // Creating the WebGL renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.xr.enabled = true;
+            container.appendChild(renderer.domElement);
+
+            // Light
+            const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
+			light.position.set(0.5, 1, 0.25);
+			scene.add(light);
+
+            controller = renderer.xr.getController(0);
+            controller.addEventListener('select', onSelect);
+            scene.add(controller);
+
+            addReticleToScene();
+
+            // Add the AR button to the DOM
+            const button = ARButton.createButton(renderer,{
+                requiredFeature: ['hit-test']
+            });
+            document.body.appendChild(button);
+
+            // Funtion so that whenever you resize the window, it doesn't loose the aspect ratio
+            window.addEventListener('resize', onWindowResize, false);
+        }
+
+        const addReticleToScene = () => {
+            const geometry = new THREE.RingBufferGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2); // este es la figura del circulo del reticle
+            const material = new THREE.MeshBasicMaterial();
+            reticle = new THREE.Mesh(geometry, material);
+
+            // we will calculate the position and rotation of this reticle every frame manually in the render() function, that's why matrixAutoUpdate is set to false
+            reticle.matrixAutoUpdate = false;
+            reticle.visible = false; // we start with the reticle not visible
+            scene.add(reticle);
+        }
+
+        const onSelect = () => {
+            if(reticle.visible){
+                // Cone added at the point of a hit test
+                const geometry = new THREE.CylinderBufferGeometry(0, 0.05, 0.2, 32);
+                const material = new THREE.MeshPhongMaterial({
+                    color: 0xffffff * Math.random()
+                });
+                const mesh = new THREE.Mesh(geometry, material);
+
+                // Set the position of the cylinder based on where the reticle is
+                mesh.position.setFromMatrixPosition(reticle.matrix);
+                mesh.quaternion.setFromRotationMatrix(reticle.matrix);
+                
+                scene.add(mesh);
+            }
+        }
+
+        const onWindowResize = () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+
+            renderer.setSize(window.innerWidth, window.innerHeight)
+        }
+
+        const animate = () => {
+            renderer.setAnimationLoop(render);
+        }
+
+        let hitTestSource = null;
+        let localSpace = null;
+        let hitTestSourceInitialized = false;
+
+        // This function gets called just once to initialize a hitTestSource
+        // The purpose of this function is to get a) a hit test source and b) a reference space
+        const initializeHitTestSource = async () => {
+            const session = renderer.xr.getSession();
+
+            // For hit testing, we use the "viewer" reference space, which is based on the device's pose at the time of the hit test
+            const viewerSpace = await session.requestReferenceSpace('viewer');
+            hitTestSource = await session.requestHitTestSource({ space: viewerSpace });
+
+            // We're going to use the reference space of "local" for drawing things, which gives us stability in terms of environment.
+            // Read more here: https://developer.mozilla.org/en-US/docs/Web/API/XRReferenceSpace
+            localSpace = await session.requestReferenceSpace('local');
+
+            // Set this to true so we don't request another hit source for the rest of the session
+            hitTestSourceInitialized = true;
+
+            // Event Listeners to reset the values in case we close the AR Session by hitting the button "End AR"
+            session.addEventListener("end", () => {
+                hitTestSourceInitialized = false;
+                hitTestSource = null;
+            })
+        }
+
+        // The callback from 'setAnimationLoop' can also return a timestamp and an XRFrame, which provides access to the information needed in order to render a single frame of animation for an XRSession describing a VR or AR Scene
+        const render = (timestamp, frame) => {
+            if(frame){
+                // 1.- Create a hit test source once and keep it for all the frames, this gets called only once, if we haven't initialized the hit test source, run this once
+                if(!hitTestSourceInitialized){
+                    initializeHitTestSource();
+                }
+
+                // 2.- Get hit test results. If we have initialized the hit test source, run this every frame
+                if(hitTestSourceInitialized){
+                    const hitTestResults = frame.getHitTestResults(hitTestSource);
+                    // The first result in the array is the closest one to the camera
+
+                    if(hitTestResults.length > 0){
+                        const hit = hitTestResults[0]; // Result that's closest to the camera
+                        const pose = hit.getPose(localSpace); // The pose will represent the position and orientation of a point in the surface
+                        reticle.visible = true;
+                        // Here we're translating the position information from the pose on to the reticle
+                        reticle.matrix.fromArray(pose.transform.matrix); // Remember that the matrix is an object that contains the info about the position and orientation of something in 3D
+                    } else {
+                        // Aqui en el else le estamos diciendo que probablemente no hay alguna superficie y ejecute lo siguente
+                        reticle.visible = false;
+                    }
+                }
+                renderer.render(scene, camera);
+            }
+        }
+         
+        init();
+        animate();
+        
+    </script>
+</body>
+</html>
